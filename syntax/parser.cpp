@@ -1,4 +1,4 @@
-﻿#include "parser.h"
+#include "parser.h"
 
 const int ID = 0;
 const int HEXNUM = 1;
@@ -144,8 +144,10 @@ STNode* Parser::Program() {
         consume(SEP, ";");
     }
 
+    STNode* declarationsNode = createNode("DECLARATIONS", "");
+    programNode->setLeft(declarationsNode);
+    
     STNode* firstDecl = nullptr;
-    STNode* lastDecl = nullptr;
     
     while (!match(KEYWORD, "begin")) {
         STNode* decl = nullptr;
@@ -169,18 +171,23 @@ STNode* Parser::Program() {
         if (decl) {
             if (!firstDecl) {
                 firstDecl = decl;
-                lastDecl = decl;
+                declarationsNode->setLeft(firstDecl);
             } else {
-                lastDecl->setRight(decl);
-                lastDecl = decl;
+                STNode* current = firstDecl;
+                while (current->getRight()) {
+                    current = current->getRight();
+                }
+                current->setRight(decl);
             }
         }
     }
 
+    STNode* statementsNode = createNode("STATEMENTS", "");
+    programNode->setRight(statementsNode);
+    
     consume(KEYWORD, "begin");
     
     STNode* firstStmt = nullptr;
-    STNode* lastStmt = nullptr;
     
     while (!match(KEYWORD, "end") && !match(SEP, ".")) {
         if (match(SEP, ";")) {
@@ -192,10 +199,13 @@ STNode* Parser::Program() {
         if (stmt) {
             if (!firstStmt) {
                 firstStmt = stmt;
-                lastStmt = stmt;
+                statementsNode->setLeft(firstStmt);
             } else {
-                lastStmt->setRight(stmt);
-                lastStmt = stmt;
+                STNode* current = firstStmt;
+                while (current->getRight()) {
+                    current = current->getRight();
+                }
+                current->setRight(stmt);
             }
         } else {
             break;
@@ -206,14 +216,6 @@ STNode* Parser::Program() {
         consume(KEYWORD, "end");
     }
     consume(SEP, ".");
-
-    if (firstDecl) {
-        programNode->setLeft(firstDecl);
-    }
-
-    if (firstStmt) {
-        programNode->setRight(firstStmt);
-    }
 
     return programNode;
 }
@@ -244,7 +246,6 @@ STNode* Parser::ConstDec() {
     consume(KEYWORD, "const");
     
     STNode* firstConst = nullptr;
-    STNode* lastConst = nullptr;
     
     while (match(ID)) {
         STNode* constItem = createNode("CONST_ITEM", "");
@@ -260,15 +261,14 @@ STNode* Parser::ConstDec() {
         
         if (!firstConst) {
             firstConst = constItem;
-            lastConst = constItem;
+            constDecl->setLeft(firstConst);
         } else {
-            lastConst->setRight(constItem);
-            lastConst = constItem;
+            STNode* current = firstConst;
+            while (current->getRight()) {
+                current = current->getRight();
+            }
+            current->setRight(constItem);
         }
-    }
-    
-    if (firstConst) {
-        constDecl->setLeft(firstConst);
     }
     
     return constDecl;
@@ -279,13 +279,11 @@ STNode* Parser::VarDec() {
     consume(KEYWORD, "var");
     
     STNode* firstGroup = nullptr;
-    STNode* lastGroup = nullptr;
     
     while (!match(KEYWORD, "begin") && (match(ID) || match(KEYWORD, "result"))) {
         STNode* varGroup = createNode("VAR_GROUP", "");
-
+        
         STNode* firstId = nullptr;
-        STNode* lastId = nullptr;
         
         do {
             STNode* idNode;
@@ -299,10 +297,13 @@ STNode* Parser::VarDec() {
             
             if (!firstId) {
                 firstId = idNode;
-                lastId = idNode;
+                varGroup->setLeft(firstId);
             } else {
-                lastId->setRight(idNode);
-                lastId = idNode;
+                STNode* current = firstId;
+                while (current->getRight()) {
+                    current = current->getRight();
+                }
+                current->setRight(idNode);
             }
             
         } while (match(SEP, ",") && (consume(SEP, ","), true));
@@ -311,81 +312,89 @@ STNode* Parser::VarDec() {
         STNode* typeNode = Type();
         consume(SEP, ";");
         
-        varGroup->setLeft(firstId);
         varGroup->setRight(typeNode);
         
         if (!firstGroup) {
             firstGroup = varGroup;
-            lastGroup = varGroup;
+            varDecl->setLeft(firstGroup);
         } else {
-            lastGroup->setRight(varGroup);
-            lastGroup = varGroup;
+            STNode* current = firstGroup;
+            while (current->getRight()) {
+                current = current->getRight();
+            }
+            current->setRight(varGroup);
         }
-    }
-
-    if (firstGroup) {
-        varDecl->setLeft(firstGroup);
     }
     
     return varDecl;
 }
 
 STNode* Parser::FunctionDec() {
-    STNode* funcDecl = createNode("FUNCTION_DECL", "");
+    STNode* funcNode = createNode("FUNCTION_DECL", "");
     consume(KEYWORD, "function");
-
+    
     STNode* funcName = Id();
-    funcDecl->setLeft(funcName);
+    funcNode->setLeft(funcName);
     
     consume(SEP, "(");
     
-    STNode* firstParam = nullptr;
-    STNode* lastParam = nullptr;
+    STNode* paramsNode = createNode("PARAMS", "");
+    funcName->setRight(paramsNode);
     
     if (!match(SEP, ")")) {
-        STNode* param = ParamGroup();
-        firstParam = param;
-        lastParam = param;
+        STNode* firstParam = ParamGroup();
+        paramsNode->setLeft(firstParam);
         
+        STNode* currentParam = firstParam;
         while (match(SEP, ";")) {
             consume(SEP, ";");
-            param = ParamGroup();
-            lastParam->setRight(param);
-            lastParam = param;
+            STNode* nextParam = ParamGroup();
+            currentParam->setRight(nextParam);
+            currentParam = nextParam;
         }
     }
     
     consume(SEP, ")");
-
+    
     consume(SEP, ":");
     STNode* returnType = Type();
-    consume(SEP, ";");
-
-    if (firstParam) {
-        funcName->setRight(firstParam);
-        lastParam->setRight(returnType);
-    } else {
-        funcName->setRight(returnType);
-    }
-
-    STNode* localVars = nullptr;
-    STNode* lastLocalVar = nullptr;
+    paramsNode->setRight(returnType);
     
+    consume(SEP, ";");
+    
+    STNode* bodyNode = createNode("FUNC_BODY", "");
+    funcNode->setRight(bodyNode);
+    
+    STNode* localVarsNode = createNode("LOCAL_VARS", "");
+    bodyNode->setLeft(localVarsNode);
+    
+    STNode* firstLocalVar = nullptr;
     while (match(KEYWORD, "var")) {
         STNode* varDecl = VarDec();
-        if (!localVars) {
-            localVars = varDecl;
-            lastLocalVar = varDecl;
+        if (!firstLocalVar) {
+            firstLocalVar = varDecl;
+            localVarsNode->setLeft(firstLocalVar);
         } else {
-            lastLocalVar->setRight(varDecl);
-            lastLocalVar = varDecl;
+            STNode* current = firstLocalVar;
+            while (current->getRight()) {
+                current = current->getRight();
+            }
+            current->setRight(varDecl);
         }
     }
     
     consume(KEYWORD, "begin");
     
-    STNode* firstStmt = nullptr;
-    STNode* lastStmt = nullptr;
+    STNode* funcStmtsNode = createNode("FUNC_STMTS", "");
+    
+    if (firstLocalVar) {
+        bodyNode->setRight(funcStmtsNode);
+    } else {
+        bodyNode->setLeft(funcStmtsNode);
+        delete localVarsNode;
+    }
+    
+    STNode* firstFuncStmt = nullptr;
     
     while (!match(KEYWORD, "end")) {
         if (match(SEP, ";")) {
@@ -395,12 +404,15 @@ STNode* Parser::FunctionDec() {
         
         STNode* stmt = Stmnt();
         if (stmt) {
-            if (!firstStmt) {
-                firstStmt = stmt;
-                lastStmt = stmt;
+            if (!firstFuncStmt) {
+                firstFuncStmt = stmt;
+                funcStmtsNode->setLeft(firstFuncStmt);
             } else {
-                lastStmt->setRight(stmt);
-                lastStmt = stmt;
+                STNode* current = firstFuncStmt;
+                while (current->getRight()) {
+                    current = current->getRight();
+                }
+                current->setRight(stmt);
             }
         } else {
             break;
@@ -410,14 +422,7 @@ STNode* Parser::FunctionDec() {
     consume(KEYWORD, "end");
     consume(SEP, ";");
     
-    if (localVars) {
-        localVars->setRight(firstStmt);
-        funcDecl->setRight(localVars);
-    } else if (firstStmt) {
-        funcDecl->setRight(firstStmt);
-    }
-    
-    return funcDecl;
+    return funcNode;
 }
 
 STNode* Parser::FormalParam() {
@@ -426,7 +431,7 @@ STNode* Parser::FormalParam() {
 
 STNode* Parser::ParamGroup() {
     STNode* paramGroup = createNode("PARAM_GROUP", "");
-
+    
     STNode* modifier = nullptr;
     if (match(KEYWORD, "var") || match(KEYWORD, "const")) {
         modifier = createNode("MODIFIER", currentToken().value);
@@ -434,23 +439,19 @@ STNode* Parser::ParamGroup() {
         paramGroup->setLeft(modifier);
     }
     
-    STNode* firstId = nullptr;
-    STNode* lastId = nullptr;
-    
-    STNode* id = Id();
-    firstId = id;
-    lastId = id;
+    STNode* firstId = Id();
+    STNode* lastId = firstId;
     
     while (match(SEP, ",")) {
         consume(SEP, ",");
-        id = Id();
-        lastId->setRight(id);
-        lastId = id;
+        STNode* nextId = Id();
+        lastId->setRight(nextId);
+        lastId = nextId;
     }
     
     consume(SEP, ":");
     STNode* typeNode = Type();
-
+    
     if (modifier) {
         modifier->setRight(firstId);
         paramGroup->setRight(typeNode);
@@ -467,7 +468,6 @@ STNode* Parser::CompoundState() {
     consume(KEYWORD, "begin");
     
     STNode* firstStmt = nullptr;
-    STNode* lastStmt = nullptr;
     
     while (!match(KEYWORD, "end")) {
         if (match(SEP, ";")) {
@@ -479,10 +479,13 @@ STNode* Parser::CompoundState() {
         if (stmt) {
             if (!firstStmt) {
                 firstStmt = stmt;
-                lastStmt = stmt;
+                compound->setLeft(firstStmt);
             } else {
-                lastStmt->setRight(stmt);
-                lastStmt = stmt;
+                STNode* current = firstStmt;
+                while (current->getRight()) {
+                    current = current->getRight();
+                }
+                current->setRight(stmt);
             }
         } else {
             break;
@@ -493,10 +496,6 @@ STNode* Parser::CompoundState() {
     
     if (match(SEP, ";")) {
         consume(SEP, ";");
-    }
-    
-    if (firstStmt) {
-        compound->setLeft(firstStmt);
     }
     
     return compound;
@@ -543,7 +542,6 @@ STNode* Parser::AssignOrCall() {
         consume(SEP, "(");
         
         STNode* firstArg = nullptr;
-        STNode* lastArg = nullptr;
         
         if (!match(SEP, ")")) {
             STNode* arg;
@@ -556,7 +554,7 @@ STNode* Parser::AssignOrCall() {
             }
             
             firstArg = arg;
-            lastArg = arg;
+            STNode* lastArg = arg;
             
             while (match(SEP, ",")) {
                 consume(SEP, ",");
@@ -597,7 +595,6 @@ STNode* Parser::WriteLnStmnt() {
     consume(SEP, "(");
     
     STNode* firstArg = nullptr;
-    STNode* lastArg = nullptr;
     
     if (!match(SEP, ")")) {
         STNode* arg;
@@ -610,7 +607,7 @@ STNode* Parser::WriteLnStmnt() {
         }
         
         firstArg = arg;
-        lastArg = arg;
+        STNode* lastArg = arg;
         
         while (match(SEP, ",")) {
             consume(SEP, ",");
@@ -693,16 +690,14 @@ STNode* Parser::Factor() {
         STNode* idNode = Id();
         
         if (match(SEP, "(")) {
-            // Вызов функции в выражении
             consume(SEP, "(");
             
             STNode* firstArg = nullptr;
-            STNode* lastArg = nullptr;
             
             if (!match(SEP, ")")) {
                 STNode* arg = Expression();
                 firstArg = arg;
-                lastArg = arg;
+                STNode* lastArg = arg;
                 
                 while (match(SEP, ",")) {
                     consume(SEP, ",");
@@ -743,7 +738,6 @@ STNode* Parser::ActualParams() {
     STNode* argsNode = createNode("ARGUMENTS", "");
     
     STNode* firstArg = nullptr;
-    STNode* lastArg = nullptr;
     
     if (!match(SEP, ")")) {
         STNode* arg;
@@ -756,7 +750,7 @@ STNode* Parser::ActualParams() {
         }
         
         firstArg = arg;
-        lastArg = arg;
+        STNode* lastArg = arg;
         
         while (match(SEP, ",")) {
             consume(SEP, ",");
