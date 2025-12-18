@@ -86,12 +86,10 @@ void BinTree::saveTreeToFile(STNode* node, ofstream& file) const {
     file << "(" << node->getData().toString();
 
     if (node->getLeft()) {
-        file << " ";
         saveTreeToFile(node->getLeft(), file);
     }
 
     if (node->getRight()) {
-        file << " ";
         saveTreeToFile(node->getRight(), file);
     }
 
