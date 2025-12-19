@@ -1,12 +1,17 @@
 #pragma once
 #include "stnode.h"
 #include "token.h"
-#include <fstream>
 #include <iostream>
-#include <stdexcept>
 #include <string>
+#include <stdexcept>
 
 using namespace std;
+
+extern const int ID;
+extern const int HEXNUM;
+extern const int DECNUM;
+extern const int SEP;
+extern const int KEYWORD;
 
 class Parser {
 private:
@@ -22,6 +27,27 @@ private:
 
     bool isVariableDeclaration();
     STNode* createNode(const string& type, const string& value = "", int line = -1);
+    STNode* makeSeq(STNode* left, STNode* right);
+    STNode* Program();
+    STNode* SingleVarDec();
+    STNode* ConstDec();
+    STNode* VarDec();
+    STNode* FunctionDec();      
+    STNode* ParamList();          
+    STNode* Param();              
+    STNode* CompoundState();
+    STNode* Stmnt();
+    STNode* AssignOrCall();
+    STNode* WriteLnStmnt();
+    STNode* Expression();
+    STNode* SimpleExpr();
+    STNode* Term();
+    STNode* Factor();
+    STNode* Id();
+    STNode* Type();
+    STNode* Const();
+    STNode* Numbers();
+    STNode* Name();
 
 public:
     Parser(const TokenArray& tokens);
@@ -35,28 +61,4 @@ public:
 
     void print() const;
     void saveTreeToFile(const string& filename) const;
-
-private:
-    STNode* Program();
-    STNode* SingleVarDec();
-    STNode* ConstDec();
-    STNode* VarDec();
-    STNode* FunctionDec();
-    STNode* FormalParam();
-    STNode* ParamGroup();
-    STNode* CompoundState();
-    STNode* Stmnt();
-    STNode* AssignOrCall();
-    STNode* WriteLnStmnt();
-    STNode* Expression();
-    STNode* SimpleExpr();
-    STNode* Term();
-    STNode* Factor();
-    STNode* ActualParams();
-    STNode* Id();
-    STNode* IdList(); 
-    STNode* Type();
-    STNode* Const();
-    STNode* Numbers();
-    STNode* Name();
 };
