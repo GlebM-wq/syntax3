@@ -25,7 +25,7 @@ struct STData {
 class STNode {
 private:
     STData data;
-    STNode* left; 
+    STNode* left;
     STNode* right;
 
 public:
@@ -38,8 +38,6 @@ public:
 
     void setLeft(STNode* node) { left = node; }
     void setRight(STNode* node) { right = node; }
-
-    bool isLeaf() const { return !left && !right; }
 };
 
 class BinTree {
@@ -48,7 +46,6 @@ private:
 
     void printBinaryTree(STNode* node, int depth, ostream& out) const;
     void saveTreeToFile(STNode* node, ofstream& file) const;
-    STNode* copyTree(STNode* otherNode);
 
 public:
     BinTree();
