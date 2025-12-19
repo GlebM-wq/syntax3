@@ -16,18 +16,10 @@ void Parser::advance() {
 
 bool Parser::match(int expectedTypeCode, const string& expectedValue) const {
     if (current >= tokens.size()) return false;
-
     const Token& token = tokens[current];
-
-    string expectedTypeStr = to_string(expectedTypeCode);
-    if (token.type != expectedTypeStr) {
-        return false;
-    }
-
-    if (!expectedValue.empty() && token.value != expectedValue) {
-        return false;
-    }
-
+    int tokenType = tokenTypeCode(token.type); 
+    if (tokenType != expectedTypeCode) return false;
+    if (!expectedValue.empty() && token.value != expectedValue) return false;
     return true;
 }
 
@@ -55,7 +47,6 @@ void Parser::consume(int expectedTypeCode, const string& expectedValue) {
         else {
             error += "EOF";
         }
-
         throw runtime_error(error);
     }
     advance();
@@ -63,29 +54,42 @@ void Parser::consume(int expectedTypeCode, const string& expectedValue) {
 
 bool Parser::isVariableDeclaration() {
     int save = current;
-
-    if (!match(ID) && !match(KEYWORD, "result")) return false;
+    if (!match(ID)) {
+        return false;
+    }
     advance();
-
     if (!match(SEP, ":")) {
         current = save;
         return false;
     }
     advance();
-
     if (!match(KEYWORD, "integer")) {
         current = save;
         return false;
     }
     advance();
-
     if (!match(SEP, ";")) {
         current = save;
         return false;
     }
-
     current = save;
     return true;
+}
+
+STNode* Parser::createNode(const string& type, const string& value, int line) {
+    if (line == -1 && current < tokens.size()) {
+        line = tokens[current].line;
+    }
+    return new STNode(STData(type, value, line));
+}
+
+STNode* Parser::makeSeq(STNode* left, STNode* right) {
+    if (!left) return right;
+    if (!right) return left;
+    STNode* seq = createNode("SEQ", "");
+    seq->setLeft(left);
+    seq->setRight(right);
+    return seq;
 }
 
 Parser::Parser(const TokenArray& tokenArray) : tokens(tokenArray), current(0), stTree(new BinTree()) {}
@@ -127,31 +131,17 @@ void Parser::saveTreeToFile(const string& filename) const {
     }
 }
 
-STNode* Parser::createNode(const string& type, const string& value, int line) {
-    if (line == -1 && current < tokens.size()) {
-        line = tokens[current].line;
-    }
-    return new STNode(STData(type, value, line));
-}
-
 STNode* Parser::Program() {
-    STNode* programNode = createNode("PROGRAM", "");
-
+    STNode* progName = nullptr;
     if (match(KEYWORD, "program")) {
         consume(KEYWORD, "program");
-        STNode* progName = Name();
-        programNode->setLeft(progName);
+        progName = Name();
         consume(SEP, ";");
     }
 
-    STNode* declarationsNode = createNode("DECLARATIONS", "");
-    programNode->setLeft(declarationsNode);
-    
-    STNode* firstDecl = nullptr;
-    
+    STNode* decls = nullptr;
     while (!match(KEYWORD, "begin")) {
         STNode* decl = nullptr;
-
         if (match(KEYWORD, "const")) {
             decl = ConstDec();
         }
@@ -165,50 +155,22 @@ STNode* Parser::Program() {
             decl = SingleVarDec();
         }
         else {
-            throw runtime_error("Unexpected token in declaration section");
+            break;
         }
-
-        if (decl) {
-            if (!firstDecl) {
-                firstDecl = decl;
-                declarationsNode->setLeft(firstDecl);
-            } else {
-                STNode* current = firstDecl;
-                while (current->getRight()) {
-                    current = current->getRight();
-                }
-                current->setRight(decl);
-            }
-        }
+        decls = makeSeq(decls, decl);
     }
 
-    STNode* statementsNode = createNode("STATEMENTS", "");
-    programNode->setRight(statementsNode);
-    
     consume(KEYWORD, "begin");
-    
-    STNode* firstStmt = nullptr;
-    
+
+    STNode* stmts = nullptr;
     while (!match(KEYWORD, "end") && !match(SEP, ".")) {
         if (match(SEP, ";")) {
-            consume(SEP, ";");
+            advance();
             continue;
         }
-        
         STNode* stmt = Stmnt();
         if (stmt) {
-            if (!firstStmt) {
-                firstStmt = stmt;
-                statementsNode->setLeft(firstStmt);
-            } else {
-                STNode* current = firstStmt;
-                while (current->getRight()) {
-                    current = current->getRight();
-                }
-                current->setRight(stmt);
-            }
-        } else {
-            break;
+            stmts = makeSeq(stmts, stmt);
         }
     }
 
@@ -217,370 +179,216 @@ STNode* Parser::Program() {
     }
     consume(SEP, ".");
 
+    STNode* programNode = createNode("PROGRAM", "");
+    programNode->setLeft(progName);
+    programNode->setRight(makeSeq(decls, stmts));
     return programNode;
 }
 
 STNode* Parser::SingleVarDec() {
-    STNode* idNode;
-    if (match(KEYWORD, "result")) {
-        idNode = createNode("KEYWORD", "result");
-        consume(KEYWORD, "result");
-    }
-    else {
-        idNode = Id();
-    }
-
+    STNode* idNode = Id();
     consume(SEP, ":");
-    STNode* typeNode = Type();
+    consume(KEYWORD, "integer");
     consume(SEP, ";");
 
-    STNode* varDecl = createNode("VAR_DECL_SINGLE", "");
+    STNode* varDecl = createNode("VAR_DECL", "");
     varDecl->setLeft(idNode);
-    varDecl->setRight(typeNode);
-    
     return varDecl;
 }
 
 STNode* Parser::ConstDec() {
-    STNode* constDecl = createNode("CONST_DECL", "");
     consume(KEYWORD, "const");
-    
-    STNode* firstConst = nullptr;
-    
+    STNode* result = nullptr;
+
     while (match(ID)) {
-        STNode* constItem = createNode("CONST_ITEM", "");
-        
         STNode* idNode = Id();
-        constItem->setLeft(idNode);
-        
         consume(SEP, "=");
-        STNode* constVal = Const();
-        constItem->setRight(constVal);
-        
+        STNode* valueNode = Const();
         consume(SEP, ";");
-        
-        if (!firstConst) {
-            firstConst = constItem;
-            constDecl->setLeft(firstConst);
-        } else {
-            STNode* current = firstConst;
-            while (current->getRight()) {
-                current = current->getRight();
-            }
-            current->setRight(constItem);
-        }
+
+        STNode* constDecl = createNode("CONST_DECL", "");
+        constDecl->setLeft(idNode);
+        constDecl->setRight(valueNode);
+
+        result = makeSeq(result, constDecl);
     }
-    
-    return constDecl;
+    return result;
 }
 
 STNode* Parser::VarDec() {
-    STNode* varDecl = createNode("VAR_DECL", "");
     consume(KEYWORD, "var");
-    
-    STNode* firstGroup = nullptr;
-    
-    while (!match(KEYWORD, "begin") && (match(ID) || match(KEYWORD, "result"))) {
-        STNode* varGroup = createNode("VAR_GROUP", "");
-        
-        STNode* firstId = nullptr;
-        
+    STNode* result = nullptr;
+
+    while (match(ID)) {
+        STNode* idList = nullptr;
+        STNode* lastId = nullptr;
+
         do {
-            STNode* idNode;
-            if (match(KEYWORD, "result")) {
-                idNode = createNode("KEYWORD", "result");
-                consume(KEYWORD, "result");
+            STNode* idNode = Id();
+            if (!idList) {
+                idList = idNode;
             }
             else {
-                idNode = Id();
+                lastId->setRight(idNode);
             }
-            
-            if (!firstId) {
-                firstId = idNode;
-                varGroup->setLeft(firstId);
-            } else {
-                STNode* current = firstId;
-                while (current->getRight()) {
-                    current = current->getRight();
-                }
-                current->setRight(idNode);
-            }
-            
+            lastId = idNode;
         } while (match(SEP, ",") && (consume(SEP, ","), true));
-        
+
         consume(SEP, ":");
-        STNode* typeNode = Type();
+        consume(KEYWORD, "integer");
         consume(SEP, ";");
-        
-        varGroup->setRight(typeNode);
-        
-        if (!firstGroup) {
-            firstGroup = varGroup;
-            varDecl->setLeft(firstGroup);
-        } else {
-            STNode* current = firstGroup;
-            while (current->getRight()) {
-                current = current->getRight();
-            }
-            current->setRight(varGroup);
+
+        STNode* currentId = idList;
+        while (currentId) {
+            STNode* next = currentId->getRight();
+            currentId->setRight(nullptr);
+
+            STNode* varDecl = createNode("VAR_DECL", "");
+            varDecl->setLeft(currentId);
+            result = makeSeq(result, varDecl);
+
+            currentId = next;
         }
     }
-    
-    return varDecl;
+    return result;
 }
 
 STNode* Parser::FunctionDec() {
-    STNode* funcNode = createNode("FUNCTION_DECL", "");
-    consume(KEYWORD, "function");
-    
-    STNode* funcName = Id();
-    funcNode->setLeft(funcName);
-    
-    consume(SEP, "(");
-    
-    STNode* paramsNode = createNode("PARAMS", "");
-    funcName->setRight(paramsNode);
-    
-    if (!match(SEP, ")")) {
-        STNode* firstParam = ParamGroup();
-        paramsNode->setLeft(firstParam);
-        
-        STNode* currentParam = firstParam;
-        while (match(SEP, ";")) {
-            consume(SEP, ";");
-            STNode* nextParam = ParamGroup();
-            currentParam->setRight(nextParam);
-            currentParam = nextParam;
-        }
+    if (!match(KEYWORD, "function")) {
+        return nullptr;
     }
-    
+
+    consume(KEYWORD, "function");
+
+    STNode* name = Id();
+    consume(SEP, "(");
+
+    STNode* params = nullptr;
+    if (!match(SEP, ")")) {
+        params = ParamList();
+    }
     consume(SEP, ")");
-    
+
     consume(SEP, ":");
     STNode* returnType = Type();
-    paramsNode->setRight(returnType);
-    
+
     consume(SEP, ";");
-    
-    STNode* bodyNode = createNode("FUNC_BODY", "");
-    funcNode->setRight(bodyNode);
-    
-    STNode* localVarsNode = createNode("LOCAL_VARS", "");
-    bodyNode->setLeft(localVarsNode);
-    
-    STNode* firstLocalVar = nullptr;
-    while (match(KEYWORD, "var")) {
-        STNode* varDecl = VarDec();
-        if (!firstLocalVar) {
-            firstLocalVar = varDecl;
-            localVarsNode->setLeft(firstLocalVar);
-        } else {
-            STNode* current = firstLocalVar;
-            while (current->getRight()) {
-                current = current->getRight();
-            }
-            current->setRight(varDecl);
-        }
-    }
-    
-    consume(KEYWORD, "begin");
-    
-    STNode* funcStmtsNode = createNode("FUNC_STMTS", "");
-    
-    if (firstLocalVar) {
-        bodyNode->setRight(funcStmtsNode);
-    } else {
-        bodyNode->setLeft(funcStmtsNode);
-        delete localVarsNode;
-    }
-    
-    STNode* firstFuncStmt = nullptr;
-    
-    while (!match(KEYWORD, "end")) {
-        if (match(SEP, ";")) {
-            consume(SEP, ";");
-            continue;
-        }
-        
-        STNode* stmt = Stmnt();
-        if (stmt) {
-            if (!firstFuncStmt) {
-                firstFuncStmt = stmt;
-                funcStmtsNode->setLeft(firstFuncStmt);
-            } else {
-                STNode* current = firstFuncStmt;
-                while (current->getRight()) {
-                    current = current->getRight();
-                }
-                current->setRight(stmt);
-            }
-        } else {
-            break;
-        }
-    }
-    
-    consume(KEYWORD, "end");
-    consume(SEP, ";");
-    
+
+    STNode* body = CompoundState();
+
+    STNode* funcNode = createNode("FUNCTION", "");
+    funcNode->setLeft(name);
+
+    STNode* meta = createNode("FUNC_PARAMS", "");
+    meta->setLeft(params);
+    meta->setRight(returnType);
+
+    funcNode->setRight(makeSeq(meta, body));
     return funcNode;
 }
 
-STNode* Parser::FormalParam() {
-    return ParamGroup();
+STNode* Parser::ParamList() {
+    STNode* result = nullptr;
+    do {
+        STNode* param = Param();
+        result = makeSeq(result, param);
+    } while (match(SEP, ";") && (consume(SEP, ";"), true));
+    return result;
 }
 
-STNode* Parser::ParamGroup() {
-    STNode* paramGroup = createNode("PARAM_GROUP", "");
-    
-    STNode* modifier = nullptr;
-    if (match(KEYWORD, "var") || match(KEYWORD, "const")) {
-        modifier = createNode("MODIFIER", currentToken().value);
-        consume(KEYWORD);
-        paramGroup->setLeft(modifier);
+STNode* Parser::Param() {
+    bool isVarParam = false;
+    if (match(KEYWORD, "var")) {
+        consume(KEYWORD, "var");
+        isVarParam = true;
     }
-    
-    STNode* firstId = Id();
-    STNode* lastId = firstId;
-    
-    while (match(SEP, ",")) {
-        consume(SEP, ",");
-        STNode* nextId = Id();
-        lastId->setRight(nextId);
-        lastId = nextId;
-    }
-    
+
+    STNode* idList = nullptr;
+    STNode* last = nullptr;
+    do {
+        STNode* id = Id();
+        if (!idList) idList = id;
+        else last->setRight(id);
+        last = id;
+    } while (match(SEP, ",") && (consume(SEP, ","), true));
+
     consume(SEP, ":");
     STNode* typeNode = Type();
-    
-    if (modifier) {
-        modifier->setRight(firstId);
-        paramGroup->setRight(typeNode);
-    } else {
-        paramGroup->setLeft(firstId);
-        paramGroup->setRight(typeNode);
+
+    STNode* result = nullptr;
+    STNode* current = idList;
+    while (current) {
+        STNode* next = current->getRight();
+        current->setRight(nullptr);
+
+        STNode* paramNode = createNode(isVarParam ? "PARAM_VAR" : "PARAM_VAL", "");
+        paramNode->setLeft(current);
+        paramNode->setRight(typeNode);
+
+        result = makeSeq(result, paramNode);
+        current = next;
     }
-    
-    return paramGroup;
+
+    return result;
 }
 
 STNode* Parser::CompoundState() {
     STNode* compound = createNode("COMPOUND_STMT", "");
     consume(KEYWORD, "begin");
-    
-    STNode* firstStmt = nullptr;
-    
+    STNode* stmts = nullptr;
     while (!match(KEYWORD, "end")) {
-        if (match(SEP, ";")) {
-            consume(SEP, ";");
-            continue;
-        }
-        
+        if (match(SEP, ";")) { advance(); continue; }
         STNode* stmt = Stmnt();
-        if (stmt) {
-            if (!firstStmt) {
-                firstStmt = stmt;
-                compound->setLeft(firstStmt);
-            } else {
-                STNode* current = firstStmt;
-                while (current->getRight()) {
-                    current = current->getRight();
-                }
-                current->setRight(stmt);
-            }
-        } else {
-            break;
-        }
+        if (stmt) stmts = makeSeq(stmts, stmt);
     }
-    
     consume(KEYWORD, "end");
-    
-    if (match(SEP, ";")) {
-        consume(SEP, ";");
-    }
-    
+    if (match(SEP, ";")) consume(SEP, ";");
+    compound->setLeft(stmts);
     return compound;
 }
 
 STNode* Parser::Stmnt() {
     if (current >= tokens.size()) return nullptr;
-
     if (match(KEYWORD, "writeln")) {
         return WriteLnStmnt();
     }
-    else if (match(ID) || match(KEYWORD, "result")) {
+    else if (match(ID)) {
         return AssignOrCall();
     }
     else if (match(KEYWORD, "begin")) {
         return CompoundState();
     }
-
     return nullptr;
 }
 
 STNode* Parser::AssignOrCall() {
-    STNode* identifier;
-
-    if (match(KEYWORD, "result")) {
-        identifier = createNode("KEYWORD", "result");
-        consume(KEYWORD, "result");
-    }
-    else {
-        identifier = Id();
-    }
+    STNode* identifier = Id();
 
     if (match(SEP, ":=")) {
         consume(SEP, ":=");
         STNode* expr = Expression();
-        
         STNode* assignNode = createNode("ASSIGN", ":=");
         assignNode->setLeft(identifier);
         assignNode->setRight(expr);
-        
         return assignNode;
     }
     else if (match(SEP, "(")) {
         consume(SEP, "(");
-        
-        STNode* firstArg = nullptr;
-        
+        STNode* args = nullptr;
         if (!match(SEP, ")")) {
-            STNode* arg;
-            if (match(KEYWORD, "result")) {
-                arg = createNode("KEYWORD", "result");
-                consume(KEYWORD, "result");
-            }
-            else {
-                arg = Expression();
-            }
-            
-            firstArg = arg;
-            STNode* lastArg = arg;
-            
+            args = Expression();
+            STNode* lastArg = args;
             while (match(SEP, ",")) {
                 consume(SEP, ",");
-                
-                if (match(KEYWORD, "result")) {
-                    arg = createNode("KEYWORD", "result");
-                    consume(KEYWORD, "result");
-                }
-                else {
-                    arg = Expression();
-                }
-                
-                lastArg->setRight(arg);
-                lastArg = arg;
+                STNode* nextArg = Expression();
+                lastArg->setRight(nextArg);
+                lastArg = nextArg;
             }
         }
-        
         consume(SEP, ")");
-        
         STNode* callNode = createNode("FUNC_CALL", "");
         callNode->setLeft(identifier);
-        
-        if (firstArg) {
-            callNode->setRight(firstArg);
-        }
-        
+        callNode->setRight(args);
         return callNode;
     }
     else {
@@ -589,52 +397,23 @@ STNode* Parser::AssignOrCall() {
 }
 
 STNode* Parser::WriteLnStmnt() {
-    STNode* writeln = createNode("WRITELN", "");
+    STNode* writeln = createNode("FUNC_CALL", "writeln");
     consume(KEYWORD, "writeln");
-    
     consume(SEP, "(");
-    
-    STNode* firstArg = nullptr;
-    
+    STNode* args = nullptr;
     if (!match(SEP, ")")) {
-        STNode* arg;
-        if (match(KEYWORD, "result")) {
-            arg = createNode("KEYWORD", "result");
-            consume(KEYWORD, "result");
-        }
-        else {
-            arg = Expression();
-        }
-        
-        firstArg = arg;
-        STNode* lastArg = arg;
-        
+        args = Expression();
+        STNode* lastArg = args;
         while (match(SEP, ",")) {
             consume(SEP, ",");
-            
-            if (match(KEYWORD, "result")) {
-                arg = createNode("KEYWORD", "result");
-                consume(KEYWORD, "result");
-            }
-            else {
-                arg = Expression();
-            }
-            
-            lastArg->setRight(arg);
-            lastArg = arg;
+            STNode* nextArg = Expression();
+            lastArg->setRight(nextArg);
+            lastArg = nextArg;
         }
     }
-    
     consume(SEP, ")");
-    
-    if (match(SEP, ";")) {
-        consume(SEP, ";");
-    }
-    
-    if (firstArg) {
-        writeln->setLeft(firstArg);
-    }
-    
+    if (match(SEP, ";")) consume(SEP, ";");
+    writeln->setRight(args);
     return writeln;
 }
 
@@ -644,81 +423,54 @@ STNode* Parser::Expression() {
 
 STNode* Parser::SimpleExpr() {
     STNode* left = Term();
-    
     while (match(SEP, "+") || match(SEP, "-")) {
         string op = currentToken().value;
         advance();
-        
         STNode* right = Term();
-        
         STNode* binOp = createNode("BIN_OP", op);
         binOp->setLeft(left);
         binOp->setRight(right);
-        
         left = binOp;
     }
-    
     return left;
 }
 
 STNode* Parser::Term() {
     STNode* left = Factor();
-    
-    while (match(SEP, "*") || match(ID, "div")) {
+    while (match(SEP, "*") || match(KEYWORD, "div")) {
         string op = currentToken().value;
         advance();
-        
         STNode* right = Factor();
-        
         STNode* binOp = createNode("BIN_OP", op);
         binOp->setLeft(left);
         binOp->setRight(right);
-        
         left = binOp;
     }
-    
     return left;
 }
 
 STNode* Parser::Factor() {
-    if (match(KEYWORD, "result")) {
-        STNode* resultNode = createNode("KEYWORD", "result");
-        consume(KEYWORD, "result");
-        return resultNode;
-    }
-    else if (match(ID)) {
+    if (match(ID)) {
         STNode* idNode = Id();
-        
         if (match(SEP, "(")) {
             consume(SEP, "(");
-            
-            STNode* firstArg = nullptr;
-            
+            STNode* args = nullptr;
             if (!match(SEP, ")")) {
-                STNode* arg = Expression();
-                firstArg = arg;
-                STNode* lastArg = arg;
-                
+                args = Expression();
+                STNode* lastArg = args;
                 while (match(SEP, ",")) {
                     consume(SEP, ",");
-                    arg = Expression();
-                    lastArg->setRight(arg);
-                    lastArg = arg;
+                    STNode* nextArg = Expression();
+                    lastArg->setRight(nextArg);
+                    lastArg = nextArg;
                 }
             }
-            
             consume(SEP, ")");
-            
             STNode* callNode = createNode("FUNC_CALL", "");
             callNode->setLeft(idNode);
-            
-            if (firstArg) {
-                callNode->setRight(firstArg);
-            }
-            
+            callNode->setRight(args);
             return callNode;
         }
-        
         return idNode;
     }
     else if (match(DECNUM) || match(HEXNUM)) {
@@ -730,73 +482,13 @@ STNode* Parser::Factor() {
         consume(SEP, ")");
         return expr;
     }
-    
     throw runtime_error("Expected factor");
-}
-
-STNode* Parser::ActualParams() {
-    STNode* argsNode = createNode("ARGUMENTS", "");
-    
-    STNode* firstArg = nullptr;
-    
-    if (!match(SEP, ")")) {
-        STNode* arg;
-        if (match(KEYWORD, "result")) {
-            arg = createNode("KEYWORD", "result");
-            consume(KEYWORD, "result");
-        }
-        else {
-            arg = Expression();
-        }
-        
-        firstArg = arg;
-        STNode* lastArg = arg;
-        
-        while (match(SEP, ",")) {
-            consume(SEP, ",");
-            
-            if (match(KEYWORD, "result")) {
-                arg = createNode("KEYWORD", "result");
-                consume(KEYWORD, "result");
-            }
-            else {
-                arg = Expression();
-            }
-            
-            lastArg->setRight(arg);
-            lastArg = arg;
-        }
-    }
-    
-    if (firstArg) {
-        argsNode->setLeft(firstArg);
-        return argsNode;
-    }
-    
-    delete argsNode;
-    return nullptr;
 }
 
 STNode* Parser::Id() {
     STNode* idNode = createNode("ID", currentToken().value);
     consume(ID);
     return idNode;
-}
-
-STNode* Parser::IdList() {
-    STNode* idList = createNode("ID_LIST", "");
-    STNode* firstId = Id();
-    idList->setLeft(firstId);
-    
-    STNode* currentId = firstId;
-    while (match(SEP, ",")) {
-        consume(SEP, ",");
-        STNode* nextId = Id();
-        currentId->setRight(nextId);
-        currentId = nextId;
-    }
-
-    return idList;
 }
 
 STNode* Parser::Type() {
@@ -820,7 +512,6 @@ STNode* Parser::Numbers() {
         consume(HEXNUM);
         return numNode;
     }
-    
     throw runtime_error("Expected number");
 }
 
