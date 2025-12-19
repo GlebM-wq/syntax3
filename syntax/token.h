@@ -22,98 +22,6 @@ struct Token {
     }
 };
 
-class StringArray {
-private:
-    string* data;
-    int capacity;
-    int length;
-
-    void resize(int newCapacity) {
-        if (newCapacity == 0) newCapacity = 1;
-
-        string* newData = new string[newCapacity];
-        int copyCount = (length < newCapacity) ? length : newCapacity;
-
-        for (int i = 0; i < copyCount; i++) {
-            newData[i] = data[i];
-        }
-
-        delete[] data;
-        data = newData;
-        capacity = newCapacity;
-
-        if (length > capacity) {
-            length = capacity; 
-        }
-    }
-
-public:
-    StringArray() : data(nullptr), capacity(0), length(0) {
-        resize(10);
-    }
-
-    StringArray(const StringArray& other) : data(nullptr), capacity(0), length(0) {
-        resize(other.capacity);
-        length = other.length;
-        for (int i = 0; i < length; i++) {
-            data[i] = other.data[i];
-        }
-    }
-
-    ~StringArray() {
-        delete[] data;
-    }
-
-    StringArray& operator=(const StringArray& other) {
-        if (this != &other) {
-            delete[] data;
-            data = nullptr;
-            capacity = 0;
-            length = 0;
-            resize(other.capacity);
-            length = other.length;
-            for (int i = 0; i < length; i++) {
-                data[i] = other.data[i];
-            }
-        }
-        return *this;
-    }
-
-    void push_back(const string& str) {
-        if (length >= capacity) {
-            resize(capacity * 2);
-        }
-        data[length] = str;
-        length++;
-    }
-
-    string& operator[](int index) {
-        if (index >= length) {
-            throw out_of_range("StringArray index out of range");
-        }
-        return data[index];
-    }
-
-    const string& operator[](int index) const {
-        if (index >= length) {
-            throw out_of_range("StringArray index out of range");
-        }
-        return data[index];
-    }
-
-    int size() const {
-        return length;
-    }
-
-    bool empty() const {
-        return length == 0;
-    }
-
-    void clear() {
-        length = 0;
-    }
-};
-
 class TokenArray {
 private:
     Token* data;
@@ -121,19 +29,15 @@ private:
     int length;
 
     void resize(int newCapacity) {
-        if (newCapacity == 0) newCapacity = 1; 
-
+        if (newCapacity <= 0) newCapacity = 1;
         Token* newData = new Token[newCapacity];
         int copyCount = (length < newCapacity) ? length : newCapacity;
-
         for (int i = 0; i < copyCount; i++) {
             newData[i] = data[i];
         }
-
         delete[] data;
         data = newData;
         capacity = newCapacity;
-
         if (length > capacity) {
             length = capacity;
         }
@@ -184,25 +88,17 @@ public:
     }
 
     Token& operator[](int index) {
-        if (index >= length) {
+        if (index < 0 || index >= length) {
             throw out_of_range("TokenArray index out of range");
         }
         return data[index];
     }
 
     const Token& operator[](int index) const {
-        if (index >= length) {
+        if (index < 0 || index >= length) {
             throw out_of_range("TokenArray index out of range");
         }
         return data[index];
-    }
-
-    Token& at(int index) {
-        return operator[](index);
-    }
-
-    const Token& at(int index) const {
-        return operator[](index);
     }
 
     int size() const {
@@ -216,69 +112,79 @@ public:
     void clear() {
         length = 0;
     }
-
-    Token* begin() {
-        return data;
-    }
-
-    Token* end() {
-        return data + length;
-    }
-
-    const Token* begin() const {
-        return data;
-    }
-
-    const Token* end() const {
-        return data + length;
-    }
 };
+
+inline int tokenTypeCode(const string& typeStr) {
+    if (typeStr == "ID") return 0;
+    if (typeStr == "HEXNUM") return 1;
+    if (typeStr == "DECNUM") return 2;
+    if (typeStr == "SEP") return 3;
+    if (typeStr == "KEYWORD") return 4;
+    return -1;
+}
 
 inline bool isNumberString(const string& str) {
     if (str.empty()) return false;
-
-    for (char c : str) {
-        if (c < '0' || c > '9') {
-            return false;
-        }
+    for (int i = 0; i < (int)str.length(); i++) {
+        if (str[i] < '0' || str[i] > '9') return false;
     }
     return true;
 }
 
 inline int stringToInt(const string& str) {
     int result = 0;
-    for (char c : str) {
-        result = result * 10 + (c - '0');
+    for (int i = 0; i < (int)str.length(); i++) {
+        result = result * 10 + (str[i] - '0');
     }
     return result;
 }
 
-inline StringArray splitString(const string& str) {
-    StringArray result;
-    string current;
-    bool inSpace = true;
+inline bool parseTokenLine(const string& line, int& outLine, string& outType, string& outValue) {
+    if (line.empty()) return false;
 
-    for (char c : str) {
-        if (c == ' ' || c == '\t') {
-            if (!inSpace) {
-                if (!current.empty()) {
-                    result.push_back(current);
-                    current.clear();
-                }
-                inSpace = true;
-            }
+    int pos = 0;
+    while (pos < line.length() && line[pos] == ' ') pos++;
+    if (pos == line.length()) return false;
+
+    int pos1 = line.find(' ', pos);
+    if (pos1 == string::npos) return false;
+    string linePart = line.substr(pos, pos1 - pos);
+    if (!isNumberString(linePart)) return false;
+    outLine = stringToInt(linePart);
+
+    pos = pos1 + 1;
+    while (pos < line.length() && line[pos] == ' ') pos++;
+    if (pos >= line.length()) return false;
+
+    int pos2 = line.find(' ', pos);
+    string typeCodeStr = (pos2 == string::npos) ? line.substr(pos) : line.substr(pos, pos2 - pos);
+    if (!isNumberString(typeCodeStr)) return false;
+    int typeCode = stringToInt(typeCodeStr);
+
+    switch (typeCode) {
+    case 0: outType = "ID"; break;
+    case 1: outType = "HEXNUM"; break;
+    case 2: outType = "DECNUM"; break;
+    case 3: outType = "SEP"; break;
+    case 4: outType = "KEYWORD"; break;
+    default: return false;
+    }
+
+    if (pos2 == string::npos) {
+        outValue = "";
+    }
+    else {
+        int valStart = pos2 + 1;
+        while (valStart < line.length() && line[valStart] == ' ') valStart;
+        if (valStart >= line.length()) {
+            outValue = "";
         }
         else {
-            current += c;
-            inSpace = false;
+            outValue = line.substr(valStart);
         }
     }
 
-    if (!current.empty()) {
-        result.push_back(current);
-    }
-
-    return result;
+    return true;
 }
 
 inline TokenArray loadTokens(const string& filename) {
@@ -287,40 +193,18 @@ inline TokenArray loadTokens(const string& filename) {
     if (!file.is_open()) {
         throw runtime_error("Cannot open file: " + filename);
     }
-
     string line;
+    int count = 0;
     while (getline(file, line)) {
         if (line.empty()) continue;
-
-        StringArray parts = splitString(line);
-        if (parts.size() < 2) {
-            continue;
+        int lineNum;
+        string type, value;
+        if (parseTokenLine(line, lineNum, type, value)) {
+            tokens.emplace_back(lineNum, type, value);
+            count++;
         }
-
-        int lineNum = 0;
-        const string& numStr = parts[0];
-
-        if (isNumberString(numStr)) {
-            lineNum = stringToInt(numStr);
-        }
-        else {
-            continue;
-        }
-
-        string type = parts[1];
-        string value;
-
-        for (int i = 2; i < parts.size(); i++) {
-            if (!value.empty()) {
-                value += " ";
-            }
-            value += parts[i];
-        }
-
-        tokens.emplace_back(lineNum, type, value);
     }
     file.close();
-
-    cout << "Loaded " << tokens.size() << " tokens" << endl;
+    cout << "Loaded " << count << " tokens" << endl;
     return tokens;
 }
