@@ -136,21 +136,17 @@ STNode* Parser::ConstDec() {
     consume(KEYWORD, "const");
     STNode* result = nullptr;
 
-    // Читаем ВСЕ константы подряд, пока идут ID
     while (match(ID)) {
         STNode* idNode = Id();
         consume(SEP, "=");
-        // Пропускаем значение (DECNUM/HEXNUM)
-        advance(); // пропускаем токен значения
+        STNode* valueNode = Numbers();
         consume(SEP, ";");
 
         STNode* constDecl = createNode("CONST_DECL", "");
         constDecl->setLeft(idNode);
-        constDecl->setRight(createNode("TYPE", "INTEGER"));
-
+        constDecl->setRight(valueNode);
         result = makeSeq(result, constDecl);
     }
-
     return result;
 }
 
