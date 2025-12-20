@@ -180,7 +180,6 @@ STNode* Parser::ConstDec() {
     consume(KEYWORD, "const");
     STNode* result = nullptr;
 
-    // Читаем все константы, пока встречаем ID в начале строки
     while (current < tokens.size() && match(ID)) {
         STNode* idNode = Id();
         consume(SEP, "=");
@@ -492,7 +491,6 @@ STNode* Parser::parseDecls() {
     STNode* result = nullptr;
 
     while (current < tokens.size()) {
-        // Если встретили begin, заканчиваем разбор объявлений
         if (match(KEYWORD, "begin")) {
             break;
         }
@@ -512,11 +510,9 @@ STNode* Parser::parseDecls() {
             currentDecl = SingleVarDec();
         }
         else {
-            // Если это не объявление, выходим из цикла
             break;
         }
 
-        // Добавляем текущее объявление к результату
         result = makeSeq(result, currentDecl);
     }
 
