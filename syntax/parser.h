@@ -48,6 +48,8 @@ private:
     STNode* Const();
     STNode* Numbers();
     STNode* Name();
+    STNode* parseDecls();
+    STNode* parseStmts();
 
 public:
     Parser(const TokenArray& tokens);
