@@ -13,11 +13,8 @@ BinTree::~BinTree() {
 
 void BinTree::printBinaryTree(STNode* node, int depth, ostream& out) const {
     if (!node) return;
-
     out << string(depth * 2, ' ') << node->getData().toString() << '\n';
-
     printBinaryTree(node->getLeft(), depth + 1, out);
-
     printBinaryTree(node->getRight(), depth + 1, out);
 }
 
