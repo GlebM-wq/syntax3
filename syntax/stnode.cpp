@@ -21,17 +21,24 @@ void BinTree::printBinaryTree(STNode* node, int depth, ostream& out) const {
     printBinaryTree(node->getRight(), depth + 1, out);
 }
 
-
 void BinTree::saveTreeToFile(STNode* node, ofstream& file) const {
     if (!node) {
-        file << "()";
         return;
     }
+
     file << "(" << node->getData().toString();
-    file << " ";
-    saveTreeToFile(node->getLeft(), file);
-    file << " ";
-    saveTreeToFile(node->getRight(), file);
+
+    STNode* left = node->getLeft();
+    STNode* right = node->getRight();
+
+    if (left) {
+        saveTreeToFile(left, file);
+    }
+
+    if (right) {
+        saveTreeToFile(right, file);
+    }
+
     file << ")";
 }
 
