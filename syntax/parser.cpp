@@ -14,6 +14,42 @@ static STNode* cloneNode(const STNode* node) {
     return copy;
 }
 
+
+void Parser::enterScope() {
+    if (scopeCount >= scopeCapacity) {
+        int newCap = scopeCapacity * 2;
+        Scope** newScopes = new Scope * [newCap];
+        for (int i = 0; i < scopeCount; ++i) {
+            newScopes[i] = scopes[i];
+        }
+        delete[] scopes;
+        scopes = newScopes;
+        scopeCapacity = newCap;
+    }
+    scopes[scopeCount++] = new Scope();
+}
+
+void Parser::exitScope() {
+    if (scopeCount <= 1) return;
+    delete scopes[--scopeCount];
+}
+
+void Parser::addToCurrentScope(const string& name, const string& kind) {
+    scopes[scopeCount - 1]->add(name, kind);
+}
+
+string Parser::getIdentifierKind(const string& name) const {
+    for (int i = scopeCount - 1; i >= 0; --i) {
+        string kind = scopes[i]->getKind(name);
+        if (!kind.empty()) return kind;
+    }
+    return "";
+}
+
+bool Parser::isDeclaredInScopes(const string& name) const {
+    return !getIdentifierKind(name).empty();
+}
+
 Token Parser::currentToken() const {
     return current < tokens.size() ? tokens[current] : Token(-1, "", "");
 }
@@ -74,9 +110,19 @@ STNode* Parser::makeSeq(STNode* left, STNode* right) {
     return seq;
 }
 
-Parser::Parser(const TokenArray& tokenArray) : tokens(tokenArray), current(0), stTree(new BinTree()) {}
+Parser::Parser(const TokenArray& tokenArray)
+    : tokens(tokenArray), current(0), stTree(new BinTree()),
+    scopes(nullptr), scopeCount(0), scopeCapacity(0), inDeclaration(false) {
+    scopeCapacity = 4;
+    scopes = new Scope * [scopeCapacity];
+    scopes[scopeCount++] = new Scope();
+}
 
 Parser::~Parser() {
+    for (int i = 0; i < scopeCount; ++i) {
+        delete scopes[i];
+    }
+    delete[] scopes;
     delete stTree;
 }
 
@@ -117,13 +163,14 @@ STNode* Parser::Program() {
     STNode* progName = nullptr;
     if (match(KEYWORD, "program")) {
         consume(KEYWORD, "program");
-        progName = Name();
+        inDeclaration = true;
+        progName = Id();
+        inDeclaration = false;
+        addToCurrentScope(progName->getData().value, "var");
         consume(SEP, ";");
     }
 
-    // Парсим всё: объявления + тело программы
     STNode* body = parseDecls();
-
     consume(SEP, ".");
 
     STNode* programNode = createNode("PROGRAM", "");
@@ -137,7 +184,11 @@ STNode* Parser::ConstDec() {
     STNode* result = nullptr;
 
     while (match(ID)) {
+        inDeclaration = true;
         STNode* idNode = Id();
+        inDeclaration = false;
+        addToCurrentScope(idNode->getData().value, "const");
+
         consume(SEP, "=");
         STNode* valueNode = Numbers();
         consume(SEP, ";");
@@ -158,7 +209,11 @@ STNode* Parser::VarDec() {
         STNode* idList = nullptr;
         STNode* last = nullptr;
         do {
+            inDeclaration = true;
             STNode* id = Id();
+            inDeclaration = false;
+            addToCurrentScope(id->getData().value, "var");
+
             if (!idList) {
                 idList = id;
             }
@@ -190,23 +245,45 @@ STNode* Parser::VarDec() {
 
 STNode* Parser::FunctionDec() {
     consume(KEYWORD, "function");
+
+    inDeclaration = true;
     STNode* name = Id();
-    consume(SEP, "(");
-    STNode* params = nullptr;
-    if (!match(SEP, ")")) {
-        params = ParamList();
+    inDeclaration = false;
+    addToCurrentScope(name->getData().value, "func");
+
+    if (match(SEP, "(")) {
+        consume(SEP, "(");
+        enterScope();
+        if (!match(SEP, ")")) {
+            ParamList();
+        }
+        consume(SEP, ")");
     }
-    consume(SEP, ")");
+    else {
+        enterScope();
+    }
+
     consume(SEP, ":");
     STNode* returnType = Type();
     consume(SEP, ";");
+
+    STNode* localDecls = nullptr;
+    while (match(KEYWORD, "var") || match(KEYWORD, "const")) {
+        if (match(KEYWORD, "var")) {
+            localDecls = makeSeq(localDecls, VarDec());
+        }
+        else if (match(KEYWORD, "const")) {
+            localDecls = makeSeq(localDecls, ConstDec());
+        }
+    }
+
     STNode* body = CompoundState();
+    exitScope();
+
     STNode* funcNode = createNode("FUNCTION", "");
     funcNode->setLeft(name);
-    STNode* paramsOrEmpty = params ? params : createNode("NO_PARAMS", "");
-    STNode* returnTypeAndBody = makeSeq(returnType, body);
-    STNode* fullSig = makeSeq(paramsOrEmpty, returnTypeAndBody);
-    funcNode->setRight(fullSig);
+    STNode* returnTypeAndBody = makeSeq(returnType, makeSeq(localDecls, body));
+    funcNode->setRight(returnTypeAndBody);
     return funcNode;
 }
 
@@ -230,16 +307,23 @@ STNode* Parser::Param() {
         consume(KEYWORD, "const");
         isConstParam = true;
     }
+
     STNode* idList = nullptr;
     STNode* last = nullptr;
     do {
+        inDeclaration = true;
         STNode* id = Id();
+        inDeclaration = false;
+        addToCurrentScope(id->getData().value, "var");
+
         if (!idList) idList = id;
         else last->setRight(id);
         last = id;
     } while (match(SEP, ",") && (consume(SEP, ","), true));
+
     consume(SEP, ":");
     STNode* typeNode = Type();
+
     STNode* result = nullptr;
     STNode* current = idList;
     while (current) {
@@ -287,9 +371,16 @@ STNode* Parser::Stmnt() {
 }
 
 STNode* Parser::AssignOrCall() {
+    inDeclaration = false;
     STNode* identifier = Id();
+    string idName = identifier->getData().value;
 
     if (match(SEP, ":=")) {
+        string kind = getIdentifierKind(idName);
+        if (kind == "const") {
+            throw runtime_error("Cannot assign to constant '" + idName + "'");
+        }
+
         consume(SEP, ":=");
         STNode* expr = Expression();
         STNode* assignNode = createNode("ASSIGN", ":=");
@@ -302,11 +393,10 @@ STNode* Parser::AssignOrCall() {
         STNode* args = nullptr;
         if (!match(SEP, ")")) {
             args = Expression();
-            // Обрабатываем остальные аргументы через makeSeq
             while (match(SEP, ",")) {
                 consume(SEP, ",");
                 STNode* nextArg = Expression();
-                args = makeSeq(args, nextArg); // ← КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+                args = makeSeq(args, nextArg);
             }
         }
         consume(SEP, ")");
@@ -377,17 +467,24 @@ STNode* Parser::Term() {
 
 STNode* Parser::Factor() {
     if (match(ID)) {
+        inDeclaration = false;
         STNode* idNode = Id();
+
         if (match(SEP, "(")) {
+            string idName = idNode->getData().value;
+            string kind = getIdentifierKind(idName);
+            if (kind != "func") {
+                throw runtime_error("Identifier '" + idName + "' is not a function");
+            }
+
             consume(SEP, "(");
             STNode* args = nullptr;
             if (!match(SEP, ")")) {
                 args = Expression();
-                // Обрабатываем остальные аргументы через makeSeq
                 while (match(SEP, ",")) {
                     consume(SEP, ",");
                     STNode* nextArg = Expression();
-                    args = makeSeq(args, nextArg); // ← КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+                    args = makeSeq(args, nextArg);
                 }
             }
             consume(SEP, ")");
@@ -411,9 +508,14 @@ STNode* Parser::Factor() {
 }
 
 STNode* Parser::Id() {
-    STNode* idNode = createNode("ID", currentToken().value);
+    string idName = currentToken().value;
     consume(ID);
-    return idNode;
+
+    if (!inDeclaration && !isDeclaredInScopes(idName)) {
+        throw runtime_error("Undeclared identifier: '" + idName + "'");
+    }
+
+    return createNode("ID", idName);
 }
 
 STNode* Parser::Type() {
@@ -441,15 +543,13 @@ STNode* Parser::Name() {
 }
 
 STNode* Parser::parseDecls() {
-    // Обработка начала тела программы
     if (match(KEYWORD, "begin")) {
         consume(KEYWORD, "begin");
         STNode* stmts = parseStmts();
         consume(KEYWORD, "end");
-        return stmts; // Возвращаем чистую цепочку операторов, без COMPOUND_STMT
+        return stmts;
     }
 
-    // Обработка объявлений
     STNode* currentDecl = nullptr;
     if (match(KEYWORD, "const")) {
         currentDecl = ConstDec();
@@ -465,9 +565,7 @@ STNode* Parser::parseDecls() {
     }
 
     STNode* rest = parseDecls();
-    if (!rest) {
-        return currentDecl;
-    }
+    if (!rest) return currentDecl;
 
     STNode* seq = createNode("SEQ", "");
     seq->setLeft(currentDecl);
