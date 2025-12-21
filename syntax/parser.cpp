@@ -235,7 +235,7 @@ STNode* Parser::VarDec() {
         STNode* currentResult = nullptr;
         for (int i = count - 1; i >= 0; i--) {
             STNode* varDecl = createNode("VAR_DECL", "");
-            varDecl->setLeft(ids[i]);
+            varDecl->setLeft(cloneNode(ids[i]));
             varDecl->setRight(createNode("TYPE", "INTEGER"));
 
             if (!currentResult) {
@@ -301,11 +301,11 @@ STNode* Parser::FunctionDec() {
 
     STNode* rightPart = nullptr;
     if (params) {
-        STNode* typeAndBody = makeSeq(returnType, fullBody);
+        STNode* typeAndBody = makeSeq(cloneNode(returnType), fullBody);
         rightPart = makeSeq(params, typeAndBody);
     }
     else {
-        rightPart = makeSeq(returnType, fullBody);
+        rightPart = makeSeq(cloneNode(returnType), fullBody);
     }
     funcNode->setRight(rightPart);
 
@@ -313,12 +313,16 @@ STNode* Parser::FunctionDec() {
 }
 
 STNode* Parser::ParamList() {
-    STNode* result = nullptr;
-    do {
-        STNode* param = Param();
-        result = makeSeq(result, param);
-    } while (match(SEP, ";") && (consume(SEP, ";"), true));
-    return result;
+    STNode* first = Param();
+    if (match(SEP, ";")) {
+        consume(SEP, ";");
+        STNode* rest = ParamList();
+        STNode* seq = createNode("SEQ", "");
+        seq->setLeft(first);
+        seq->setRight(rest);
+        return seq;
+    }
+    return first;
 }
 
 STNode* Parser::Param() {
@@ -333,35 +337,37 @@ STNode* Parser::Param() {
         isConstParam = true;
     }
 
-    STNode* idList = nullptr;
-    STNode* last = nullptr;
+    const int MAX = 100;
+    STNode* ids[MAX];
+    int count = 0;
     do {
         inDeclaration = true;
         STNode* id = Id();
         inDeclaration = false;
         addToCurrentScope(id->getData().value, "var");
-
-        if (!idList) idList = id;
-        else last->setRight(id);
-        last = id;
+        if (count < MAX) {
+            id->setLeft(nullptr);
+            id->setRight(nullptr);
+            ids[count++] = id;
+        }
     } while (match(SEP, ",") && (consume(SEP, ","), true));
 
     consume(SEP, ":");
     STNode* typeNode = Type();
 
     STNode* result = nullptr;
-    STNode* current = idList;
-    while (current) {
-        STNode* next = current->getRight();
-        current->setRight(nullptr);
-        string paramType = "PARAM_VAL";
-        if (isVarParam) paramType = "PARAM_VAR";
-        else if (isConstParam) paramType = "PARAM_CONST";
+    for (int i = count - 1; i >= 0; i--) {
+        string paramType = isVarParam ? "PARAM_VAR" :
+            isConstParam ? "PARAM_CONST" : "PARAM_VAL";
         STNode* paramNode = createNode(paramType, "");
-        paramNode->setLeft(current);
-        paramNode->setRight(typeNode);
-        result = makeSeq(result, paramNode);
-        current = next;
+        paramNode->setLeft(cloneNode(ids[i]));
+        paramNode->setRight(cloneNode(typeNode));
+        if (!result) {
+            result = paramNode;
+        }
+        else {
+            result = makeSeq(paramNode, result);
+        }
     }
     return result;
 }
@@ -478,14 +484,34 @@ STNode* Parser::SimpleExpr() {
 
 STNode* Parser::Term() {
     STNode* left = Factor();
-    while (match(SEP, "*") || match(KEYWORD, "div")) {
-        string op = currentToken().value;
-        advance();
-        STNode* right = Factor();
-        STNode* binOp = createNode("BIN_OP", op);
-        binOp->setLeft(left);
-        binOp->setRight(right);
-        left = binOp;
+    while (true) {
+        if (match(SEP, "*")) {
+            consume(SEP, "*");
+            STNode* right = Factor();
+            STNode* binOp = createNode("BIN_OP", "*");
+            binOp->setLeft(left);
+            binOp->setRight(right);
+            left = binOp;
+        }
+        else if (match(SEP, "/")) {
+            consume(SEP, "/");
+            STNode* right = Factor();
+            STNode* binOp = createNode("BIN_OP", "/"); 
+            binOp->setLeft(left);
+            binOp->setRight(right);
+            left = binOp;
+        }
+        else if (match(KEYWORD, "div")) {
+            consume(KEYWORD, "div");
+            STNode* right = Factor();
+            STNode* binOp = createNode("BIN_OP", "div");
+            binOp->setLeft(left);
+            binOp->setRight(right);
+            left = binOp;
+        }
+        else {
+            break;
+        }
     }
     return left;
 }
@@ -568,9 +594,29 @@ STNode* Parser::Name() {
 }
 
 STNode* Parser::parseDecls() {
-    const int MAX_DECLS = 100;
+    const int MAX_DECLS = 200;
     STNode* decls[MAX_DECLS];
     int count = 0;
+
+    auto addDecl = [&](STNode* node) {
+        if (!node || count >= MAX_DECLS) return;
+        STNode* stack[100];
+        int stackTop = 0;
+        stack[stackTop++] = node;
+
+        while (stackTop > 0 && count < MAX_DECLS) {
+            STNode* current = stack[--stackTop];
+            if (!current) continue;
+
+            if (current->getData().type == "SEQ") {
+                if (current->getRight() && stackTop < 100) stack[stackTop++] = current->getRight();
+                if (current->getLeft() && stackTop < 100) stack[stackTop++] = current->getLeft();
+            }
+            else {
+                decls[count++] = current;
+            }
+        }
+        };
 
     while (match(KEYWORD, "const") || match(KEYWORD, "var") || match(KEYWORD, "function")) {
         STNode* decl = nullptr;
@@ -584,19 +630,7 @@ STNode* Parser::parseDecls() {
             decl = FunctionDec();
         }
         if (decl) {
-            auto flatten = [&](STNode* node, auto&& self) -> void {
-                if (!node) return;
-                if (node->getData().type == "SEQ") {
-                    self(node->getLeft(), self);
-                    self(node->getRight(), self);
-                }
-                else {
-                    if (count < MAX_DECLS) {
-                        decls[count++] = node;
-                    }
-                }
-                };
-            flatten(decl, flatten);
+            addDecl(decl);
         }
     }
 
@@ -614,7 +648,6 @@ STNode* Parser::parseDecls() {
         consume(KEYWORD, "begin");
         STNode* body = parseStmts();
         consume(KEYWORD, "end");
-
         if (result) {
             result = makeSeq(result, body);
         }
