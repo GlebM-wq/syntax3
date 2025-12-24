@@ -80,6 +80,56 @@ private:
         }
     };
 
+    struct FunctionSignature {
+        string name;
+        int paramCount;
+        FunctionSignature* next;
+
+        FunctionSignature(const string& n, int count) : name(n), paramCount(count), next(nullptr) {}
+    };
+
+    class FunctionTable {
+    private:
+        FunctionSignature* head;
+
+    public:
+        FunctionTable() : head(nullptr) {}
+
+        ~FunctionTable() {
+            FunctionSignature* current = head;
+            while (current) {
+                FunctionSignature* next = current->next;
+                delete current;
+                current = next;
+            }
+        }
+
+        void addFunction(const string& name, int paramCount) {
+            FunctionSignature* current = head;
+            while (current) {
+                if (current->name == name) {
+                    throw runtime_error("Function '" + name + "' already declared");
+                }
+                current = current->next;
+            }
+
+            FunctionSignature* newFunc = new FunctionSignature(name, paramCount);
+            newFunc->next = head;
+            head = newFunc;
+        }
+
+        int getParamCount(const string& name) const {
+            FunctionSignature* current = head;
+            while (current) {
+                if (current->name == name) {
+                    return current->paramCount;
+                }
+                current = current->next;
+            }
+            return -1;
+        }
+    };
+
     const TokenArray& tokens;
     int current;
     BinTree* stTree;
@@ -88,6 +138,7 @@ private:
     int scopeCount;
     int scopeCapacity;
     bool inDeclaration;
+    FunctionTable* funcTable;
 
     Token currentToken() const;
     void advance();
@@ -120,9 +171,12 @@ private:
     STNode* Id();
     STNode* Type();
     STNode* Numbers();
-    STNode* Name();
     STNode* parseDecls();
     STNode* parseStmts();
+    STNode* parseMainBlock();
+
+    int countParams(STNode* paramsNode);
+    int countArguments(STNode* argsNode);
 
 public:
     Parser(const TokenArray& tokens);
