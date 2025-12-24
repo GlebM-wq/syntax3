@@ -40,12 +40,32 @@ public:
     void setRight(STNode* node) { right = node; }
 };
 
+class NodeStack {
+private:
+    STNode** data;
+    int capacity;
+    int top;
+
+    void resize(int newCapacity);
+
+public:
+    NodeStack();
+    ~NodeStack();
+
+    void push(STNode* node);
+    STNode* pop();
+    STNode* peek() const;
+    bool isEmpty() const;
+    int size() const;
+    void clear();
+};
+
 class BinTree {
 private:
     STNode* root;
 
     void printBinaryTree(STNode* node, int depth, ostream& out) const;
-    void saveTreeToFile(STNode* node, ofstream& file) const;
+    void writeNode(STNode* node, ofstream& file) const;
 
 public:
     BinTree();
@@ -56,5 +76,5 @@ public:
     bool isEmpty() const { return root == nullptr; }
 
     void printST() const;
-    void saveSTToFile(const string& filename) const;
+    void saveToFile(const string& filename) const;
 };
