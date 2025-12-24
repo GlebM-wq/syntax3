@@ -14,6 +14,52 @@ static STNode* cloneNode(const STNode* node) {
     return copy;
 }
 
+int Parser::countParams(STNode* paramsNode) {
+    if (!paramsNode) return 0;
+
+    int count = 0;
+    NodeStack stack;
+    stack.push(paramsNode);
+
+    while (!stack.isEmpty()) {
+        STNode* current = stack.pop();
+        if (!current) continue;
+
+        if (current->getData().type.find("PARAM_") == 0) {
+            count++;
+        }
+        else if (current->getData().type == "SEQ") {
+            if (current->getRight()) stack.push(current->getRight());
+            if (current->getLeft()) stack.push(current->getLeft());
+        }
+    }
+
+    return count;
+}
+
+int Parser::countArguments(STNode* argsNode) {
+    if (!argsNode) return 0;
+
+    int count = 0;
+    NodeStack stack;
+    stack.push(argsNode);
+
+    while (!stack.isEmpty()) {
+        STNode* current = stack.pop();
+        if (!current) continue;
+
+        if (current->getData().type != "SEQ") {
+            count++;
+        }
+        else {
+            if (current->getRight()) stack.push(current->getRight());
+            if (current->getLeft()) stack.push(current->getLeft());
+        }
+    }
+
+    return count;
+}
+
 void Parser::enterScope() {
     if (scopeCount >= scopeCapacity) {
         int newCap = scopeCapacity * 2;
@@ -77,16 +123,22 @@ void Parser::consume(int expectedTypeCode, const string& expectedValue) {
         case KEYWORD: typeStr = "keyword"; break;
         default: typeStr = "token type " + to_string(expectedTypeCode);
         }
-        string error = "Syntax error: expected " + typeStr;
+
+        string lineInfo = "";
+        if (current < tokens.size() && tokens[current].line != -1) {
+            lineInfo = " at line " + to_string(tokens[current].line);
+        }
+
+        string error = "Syntax error" + lineInfo + ": expected " + typeStr;
         if (!expectedValue.empty()) error += " '" + expectedValue + "'";
         error += ", but found ";
         if (current < tokens.size()) {
             const Token& token = tokens[current];
-            error += "token type " + token.type;
-            if (!token.value.empty()) error += " value '" + token.value + "'";
+            error += token.type;
+            if (!token.value.empty()) error += " '" + token.value + "'";
         }
         else {
-            error += "EOF";
+            error += "end of file";
         }
         throw runtime_error(error);
     }
@@ -111,7 +163,8 @@ STNode* Parser::makeSeq(STNode* left, STNode* right) {
 
 Parser::Parser(const TokenArray& tokenArray)
     : tokens(tokenArray), current(0), stTree(new BinTree()),
-    scopes(nullptr), scopeCount(0), scopeCapacity(0), inDeclaration(false) {
+    scopes(nullptr), scopeCount(0), scopeCapacity(0), inDeclaration(false),
+    funcTable(new FunctionTable()) {
     scopeCapacity = 4;
     scopes = new Scope * [scopeCapacity];
     scopes[scopeCount++] = new Scope();
@@ -123,6 +176,7 @@ Parser::~Parser() {
     }
     delete[] scopes;
     delete stTree;
+    delete funcTable;
 }
 
 void Parser::parse() {
@@ -153,13 +207,14 @@ void Parser::print() const {
 
 void Parser::saveTreeToFile(const string& filename) const {
     if (stTree) {
-        stTree->saveSTToFile(filename);
+        stTree->saveToFile(filename);
         cout << "Syntax tree saved to '" << filename << "'" << endl;
     }
 }
 
 STNode* Parser::Program() {
     STNode* progName = nullptr;
+
     if (match(KEYWORD, "program")) {
         consume(KEYWORD, "program");
         inDeclaration = true;
@@ -169,13 +224,41 @@ STNode* Parser::Program() {
         consume(SEP, ";");
     }
 
-    STNode* body = parseDecls();
-    consume(SEP, ".");
+    STNode* decls = parseDecls();
+
+    if (!match(KEYWORD, "begin")) {
+        throw runtime_error("Syntax error: expected 'begin' after declarations");
+    }
+
+    STNode* body = parseMainBlock();
 
     STNode* programNode = createNode("PROGRAM", "");
     programNode->setLeft(progName);
-    programNode->setRight(body);
+
+    STNode* declarationsAndBody = nullptr;
+    if (decls) {
+        declarationsAndBody = makeSeq(decls, body);
+    }
+    else {
+        declarationsAndBody = body;
+    }
+
+    programNode->setRight(declarationsAndBody);
     return programNode;
+}
+
+STNode* Parser::parseMainBlock() {
+    consume(KEYWORD, "begin");
+
+    if (match(KEYWORD, "var")) {
+        throw runtime_error("Syntax error: variable declarations must be before 'begin' in main block");
+    }
+
+    STNode* body = parseStmts();
+    consume(KEYWORD, "end");
+    consume(SEP, ".");
+
+    return body;
 }
 
 STNode* Parser::ConstDec() {
@@ -262,14 +345,15 @@ STNode* Parser::FunctionDec() {
     inDeclaration = true;
     STNode* name = Id();
     inDeclaration = false;
-    addToCurrentScope(name->getData().value, "func");
+    string funcName = name->getData().value;
+    addToCurrentScope(funcName, "func");
 
     STNode* params = nullptr;
     if (match(SEP, "(")) {
         consume(SEP, "(");
         enterScope();
         if (!match(SEP, ")")) {
-            params = ParamList();\
+            params = ParamList();
         }
         consume(SEP, ")");
     }
@@ -303,9 +387,12 @@ STNode* Parser::FunctionDec() {
     if (params) {
         STNode* typeAndBody = makeSeq(cloneNode(returnType), fullBody);
         rightPart = makeSeq(params, typeAndBody);
+        int paramCount = countParams(params);
+        funcTable->addFunction(funcName, paramCount);
     }
     else {
         rightPart = makeSeq(cloneNode(returnType), fullBody);
+        funcTable->addFunction(funcName, 0);
     }
     funcNode->setRight(rightPart);
 
@@ -373,16 +460,18 @@ STNode* Parser::Param() {
 }
 
 STNode* Parser::CompoundState() {
-    STNode* compound = createNode("COMPOUND_STMT", "");
     consume(KEYWORD, "begin");
-    STNode* stmts = nullptr;
-    while (!match(KEYWORD, "end")) {
-        if (match(SEP, ";")) { advance(); continue; }
-        STNode* stmt = Stmnt();
-        if (stmt) stmts = makeSeq(stmts, stmt);
+
+    if (match(KEYWORD, "var")) {
+        throw runtime_error("Syntax error: variable declarations inside 'begin' block are not allowed");
     }
+
+    STNode* stmts = parseStmts();
+
     consume(KEYWORD, "end");
     if (match(SEP, ";")) consume(SEP, ";");
+
+    STNode* compound = createNode("COMPOUND_STMT", "");
     compound->setLeft(stmts);
     return compound;
 }
@@ -423,14 +512,38 @@ STNode* Parser::AssignOrCall() {
         consume(SEP, "(");
         STNode* args = nullptr;
         if (!match(SEP, ")")) {
-            args = Expression();
-            while (match(SEP, ",")) {
-                consume(SEP, ",");
-                STNode* nextArg = Expression();
-                args = makeSeq(args, nextArg);
+            NodeStack argStack;
+            do {
+                STNode* expr = Expression();
+                argStack.push(expr);
+            } while (match(SEP, ",") && (consume(SEP, ","), true));
+
+            args = nullptr;
+            while (!argStack.isEmpty()) {
+                STNode* expr = argStack.pop();
+                STNode* wrapper = createNode("PARAM_VAL", "");
+                wrapper->setLeft(expr);
+                wrapper->setRight(createNode("TYPE", "integer"));
+                args = makeSeq(wrapper, args);
             }
         }
         consume(SEP, ")");
+
+        string kind = getIdentifierKind(idName);
+        if (kind == "func") {
+            int expectedCount = funcTable->getParamCount(idName);
+            if (expectedCount == -1) {
+                throw runtime_error("Function '" + idName + "' not found in function table");
+            }
+
+            int actualCount = countArguments(args);
+            if (actualCount != expectedCount) {
+                throw runtime_error("Function '" + idName + "' expects " +
+                    to_string(expectedCount) + " arguments, but " +
+                    to_string(actualCount) + " were provided");
+            }
+        }
+
         STNode* callNode = createNode("FUNC_CALL", "");
         callNode->setLeft(identifier);
         callNode->setRight(args);
@@ -496,7 +609,7 @@ STNode* Parser::Term() {
         else if (match(SEP, "/")) {
             consume(SEP, "/");
             STNode* right = Factor();
-            STNode* binOp = createNode("BIN_OP", "/"); 
+            STNode* binOp = createNode("BIN_OP", "/");
             binOp->setLeft(left);
             binOp->setRight(right);
             left = binOp;
@@ -531,14 +644,35 @@ STNode* Parser::Factor() {
             consume(SEP, "(");
             STNode* args = nullptr;
             if (!match(SEP, ")")) {
-                args = Expression();
-                while (match(SEP, ",")) {
-                    consume(SEP, ",");
-                    STNode* nextArg = Expression();
-                    args = makeSeq(args, nextArg);
+                NodeStack argStack;
+                do {
+                    STNode* expr = Expression();
+                    argStack.push(expr);
+                } while (match(SEP, ",") && (consume(SEP, ","), true));
+
+                args = nullptr;
+                while (!argStack.isEmpty()) {
+                    STNode* expr = argStack.pop();
+                    STNode* wrapper = createNode("PARAM_VAL", "");
+                    wrapper->setLeft(expr);
+                    wrapper->setRight(createNode("TYPE", "integer"));
+                    args = makeSeq(wrapper, args);
                 }
             }
             consume(SEP, ")");
+
+            int expectedCount = funcTable->getParamCount(idName);
+            if (expectedCount == -1) {
+                throw runtime_error("Function '" + idName + "' not found in function table");
+            }
+
+            int actualCount = countArguments(args);
+            if (actualCount != expectedCount) {
+                throw runtime_error("Function '" + idName + "' expects " +
+                    to_string(expectedCount) + " arguments, but " +
+                    to_string(actualCount) + " were provided");
+            }
+
             STNode* callNode = createNode("FUNC_CALL", "");
             callNode->setLeft(idNode);
             callNode->setRight(args);
@@ -589,10 +723,6 @@ STNode* Parser::Numbers() {
     throw runtime_error("Expected number");
 }
 
-STNode* Parser::Name() {
-    return Id();
-}
-
 STNode* Parser::parseDecls() {
     const int MAX_DECLS = 200;
     STNode* decls[MAX_DECLS];
@@ -600,17 +730,17 @@ STNode* Parser::parseDecls() {
 
     auto addDecl = [&](STNode* node) {
         if (!node || count >= MAX_DECLS) return;
-        STNode* stack[100];
-        int stackTop = 0;
-        stack[stackTop++] = node;
 
-        while (stackTop > 0 && count < MAX_DECLS) {
-            STNode* current = stack[--stackTop];
+        NodeStack stack;
+        stack.push(node);
+
+        while (!stack.isEmpty() && count < MAX_DECLS) {
+            STNode* current = stack.pop();
             if (!current) continue;
 
             if (current->getData().type == "SEQ") {
-                if (current->getRight() && stackTop < 100) stack[stackTop++] = current->getRight();
-                if (current->getLeft() && stackTop < 100) stack[stackTop++] = current->getLeft();
+                if (current->getRight()) stack.push(current->getRight());
+                if (current->getLeft()) stack.push(current->getLeft());
             }
             else {
                 decls[count++] = current;
@@ -641,18 +771,6 @@ STNode* Parser::parseDecls() {
         }
         else {
             result = makeSeq(decls[i], result);
-        }
-    }
-
-    if (match(KEYWORD, "begin")) {
-        consume(KEYWORD, "begin");
-        STNode* body = parseStmts();
-        consume(KEYWORD, "end");
-        if (result) {
-            result = makeSeq(result, body);
-        }
-        else {
-            result = body;
         }
     }
 
